@@ -22,6 +22,7 @@ import asyncio
 import time
 import csv
 import requests
+import threading
 
 # Global variable to track the user's last response time
 last_response_time = None
@@ -95,6 +96,7 @@ class static:
    history=[]
    vocabs=[]
    messages=[]
+   last_response_time=None
    template2="""
    \n
    history:
@@ -152,28 +154,9 @@ def warmup(msg):
     result=result.replace('A2ZBot:','',-1).replace('AI:','',-1).replace('A2Zbot:','',-1)
     chat_time = end_time - start_time
     static.total_chat_duration+=chat_time
+    last_response_time=end_time
     return result
    
-def vocabularies(number,domain):
-    text='more than {} "{}" vocabularies without duplicating,please return as following:word,word,'.format(number,domain)
-    messages=[]
-    system_role={"role": "system", "content": """You are smart bot to return specific vocabularies,please do not say anything to user,assistant reply must be like this :word,word,.."""}
-    user_role={"role": "user", "content": "more than 3 Travel vocabularies without duplicating"}
-
-    assistant_role={"role": "assistant", "content": "Adventure,Boarding pass,Explorer,Journey"}
-
-    messages.append(system_role)
-    messages.append(user_role)
-    messages.append(assistant_role)
-    if text:
-        messages.append({"role": "user", "content": text})
-        chat = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo", messages=messages,temperature=0.9
-        )
-        reply = chat.choices[0].message.content
-        messages.append({"role": "assistant", "content": reply})
-        return reply
-    
 def A2ZBot(prompt):
   bot_response=openai.Completion.create(
         prompt=prompt,
@@ -448,37 +431,6 @@ def save_data():
     print("Data saved to CSV file: {}".format(filename))
 
 
-def shutdown_handler():
-    save_data()
-    print("Shutting down...")
-
-# Function to update the last response time
-def update_last_response_time():
-    global last_response_time
-    last_response_time = time.time()
-
-# Asynchronous function to check for inactivity and trigger shutdown
-async def check_inactivity():
-    global last_response_time
-
-    while True:
-        if last_response_time is not None and time.time() - last_response_time > 60:
-            shutdown_handler()
-            break
-        await asyncio.sleep(10)  # Check every 60 seconds
-
-# Event to update the last response time
-@app.middleware("http")
-async def update_last_response_time_middleware(request, call_next):
-    update_last_response_time()
-    response = await call_next(request)
-    return response
-
-# Event on application startup
-@app.on_event("startup")
-async def startup_event():
-    # Start the inactivity check loop as a background task
-    asyncio.create_task(check_inactivity())
 
 
 
@@ -487,10 +439,21 @@ def home(request: Request):
     reset_session()
     return templates.TemplateResponse("index.html", {"request": request})
 
+response_timer = None
+
 @app.get("/getChatBotResponse")
 def get_bot_response(msg: str):
-      return conversation(msg)
-      
+    result = conversation(msg)
+
+    global response_timer
+    if response_timer is not None:
+        response_timer.cancel()  # إلغاء المؤقت السابق إذا كان قائمًا
+
+    # إنشاء مؤقت جديد لاستدعاء save_data بعد مرور 20 ثانية
+    response_timer = threading.Timer(20, save_data)
+    response_timer.start()
+
+    return result      
     
 
 
